@@ -45,10 +45,17 @@ jobs:
       # Instead we pull the real codebase from the private vault using a PAT.
       - name: Clone private vault
         run: |
+          # PRIVATE_REPO_PAT is a Fine-Grained PAT stored as a Secret in THIS
+          # (public burner) repo. It only needs Contents: read on 0Cymantek0/video-render.
+          # GitHub accepts PATs embedded in the clone URL — this is the standard
+          # way to authenticate against private repos from public Actions runners.
+          #
+          # TODO: Remove --branch flag once feature/burner-repo-render is merged to main
           git clone \
-            https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/dubailottery/video-render.git \
+            --branch feature/burner-repo-render \
+            https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/0Cymantek0/video-render.git \
             ./repo
-        # ^^^^ Replace with your actual private repo path if different
+
 
       # ── 2. Setup Node & Install deps ─────────────────────────────────────────
       - name: Setup Node.js 20
