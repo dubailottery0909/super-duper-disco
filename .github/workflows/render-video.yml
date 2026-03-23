@@ -77,26 +77,35 @@ jobs:
           echo '${{ inputs.props }}' > ./repo/props.json
 
       # ── 4. Calculate frame range ──────────────────────────────────────────────
-      # Total frames: 9 min × 30 fps = 16,200 (adjust TOTAL_FRAMES if your
-      # composition is different — look at your Remotion duration.ts)
-      # Each of 20 chunks gets 810 frames (16200 / 20 = 810)
+      # We dynamically calculate total frames based on the incoming props using
+      # the exact same function the Remotion composition uses.
       - name: Calculate frame range
         id: frames
+        working-directory: ./repo
         run: |
-          TOTAL_FRAMES=16200
+          cat << 'EOF' > calc-frames.ts
+          import { getVideoDurationInFrames } from './src/remotion/duration';
+          import fs from 'fs';
+          const props = JSON.parse(fs.readFileSync('./props.json', 'utf-8'));
+          console.log(getVideoDurationInFrames(props));
+          EOF
+          
+          TOTAL_FRAMES=$(npx tsx calc-frames.ts)
           CHUNKS=20
           CHUNK_SIZE=$(( TOTAL_FRAMES / CHUNKS ))
           CHUNK_INDEX=${{ matrix.chunk_index }}
           START_FRAME=$(( CHUNK_INDEX * CHUNK_SIZE ))
-          # Last chunk takes any remainder to ensure we cover all frames
+          
+          # Last chunk takes any remainder
           if [ $CHUNK_INDEX -eq $(( CHUNKS - 1 )) ]; then
             END_FRAME=$(( TOTAL_FRAMES - 1 ))
           else
             END_FRAME=$(( START_FRAME + CHUNK_SIZE - 1 ))
           fi
+          
           echo "start=${START_FRAME}" >> $GITHUB_OUTPUT
           echo "end=${END_FRAME}" >> $GITHUB_OUTPUT
-          echo "Chunk $CHUNK_INDEX → frames ${START_FRAME}-${END_FRAME}"
+          echo "Total Frames: $TOTAL_FRAMES | Chunk $CHUNK_INDEX → frames ${START_FRAME}-${END_FRAME}"
 
       # ── 5. Install Chromium for Remotion ─────────────────────────────────────
       - name: Install Chromium
