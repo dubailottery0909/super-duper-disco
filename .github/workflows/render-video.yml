@@ -5,7 +5,7 @@
 # Triggered by the Next.js API via POST /repos/.../dispatches
 #
 # Pipeline:
-#   1. 20 parallel jobs clone the PRIVATE repo and render a video chunk
+#   1. A configurable swarm of parallel jobs renders video chunks
 #   2. One final job stitches all chunks together with ffmpeg
 #   3. The final MP4 is published as a public GitHub release asset
 #   4. The render_jobs row in Supabase DB is marked 'completed'
@@ -30,7 +30,7 @@ permissions:
 
 env:
   REMOTION_CONCURRENCY: '4'
-  REMOTION_CHUNKS: '20'
+  REMOTION_CHUNKS: '60'
   PREPARED_WORKSPACE_ARTIFACT: prepared-renderer-workspace
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ jobs:
     name: Prepare renderer workspace
     runs-on: ubuntu-latest
     outputs:
+      chunk_matrix: ${{ steps.chunk-matrix.outputs.chunk_matrix }}
       total_frames: ${{ steps.frames.outputs.total_frames }}
 
     steps:
@@ -70,6 +71,12 @@ jobs:
       - name: Write props.json
         run: |
           echo '${{ inputs.props }}' > ./repo/props.json
+
+      - name: Build chunk matrix
+        id: chunk-matrix
+        run: |
+          CHUNK_MATRIX=$(node -e "const count = Number.parseInt(process.env.REMOTION_CHUNKS, 10); console.log(JSON.stringify(Array.from({length: count}, (_, index) => index)));")
+          echo "chunk_matrix=${CHUNK_MATRIX}" >> $GITHUB_OUTPUT
 
       # ── 4. Calculate total frames once ──────────────────────────────────────
       - name: Calculate total frames
@@ -112,7 +119,7 @@ jobs:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 1 — THE SWARM
-# 20 concurrent runners each render 1/20th of the video
+# REMOTION_CHUNKS concurrent runners each render one slice of the video
 # ─────────────────────────────────────────────────────────────────────────────
   render-chunk:
     name: Render chunk ${{ matrix.chunk_index }}
@@ -122,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false   # if one chunk errors, let others finish so we can debug
       matrix:
-        chunk_index: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+        chunk_index: ${{ fromJSON(needs.prepare-renderer.outputs.chunk_matrix) }}
 
     steps:
       # ── 1. Download prepared renderer workspace ─────────────────────────────
@@ -194,7 +201,7 @@ jobs:
     steps:
       # ── 1. Download all chunk artifacts ──────────────────────────────────────
       # actions/download-artifact@v4 downloads into a directory per artifact,
-      # so chunk-0/out.mp4, chunk-1/out.mp4, … chunk-19/out.mp4
+      # so chunk-0/out.mp4, chunk-1/out.mp4, … chunk-N/out.mp4
       - name: Download all chunks
         uses: actions/download-artifact@v4
         with:
@@ -207,12 +214,13 @@ jobs:
 
       # ── 3. Generate concat list ───────────────────────────────────────────────
       # ffmpeg's concat demuxer needs a text file listing files in order.
-      # We sort numerically (chunk-0, chunk-1 … chunk-19) so the video
+      # We sort numerically (chunk-0, chunk-1 …) so the video
       # is assembled in the correct sequence.
       - name: Generate concat.txt
         run: |
+          CHUNKS=${{ env.REMOTION_CHUNKS }}
           > concat.txt
-          for i in $(seq 0 19); do
+          for i in $(seq 0 $(( CHUNKS - 1 ))); do
             echo "file 'chunk-${i}/out.mp4'" >> concat.txt
           done
           echo "--- concat.txt contents ---"
