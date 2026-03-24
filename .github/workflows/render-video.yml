@@ -71,6 +71,13 @@ jobs:
         run: |
           echo '${{ inputs.props }}' > ./repo/props.json
 
+      - name: Stage remote render assets once
+        working-directory: ./repo
+        run: |
+          node scripts/stage-render-assets.mjs \
+            --props ./props.json \
+            --output-dir render-assets/workflow/${{ inputs.job_id }}
+
       - name: Build chunk matrix
         id: chunk-matrix
         run: |
