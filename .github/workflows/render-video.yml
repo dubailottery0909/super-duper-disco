@@ -51,7 +51,6 @@ jobs:
       - name: Clone private vault
         run: |
           git clone \
-            --branch feature/burner-repo-render \
             https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/0Cymantek0/video-render.git \
             ./repo
 
