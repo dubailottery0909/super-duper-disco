@@ -1,7 +1,7 @@
 # =============================================================================
 # render-video.yml
 #
-# Lives in the PUBLIC "burner" repo: dubailottery/super-duper-disco
+# Lives in the PUBLIC "burner" repo: dubailottery0909/super-duper-disco
 # Triggered by the Next.js API via POST /repos/.../dispatches
 #
 # Pipeline:
