@@ -8,7 +8,7 @@
 #   1. A configurable swarm of parallel jobs renders video chunks
 #   2. One final job stitches all chunks together with ffmpeg
 #   3. The final MP4 is published as a public GitHub release asset
-#   4. The render_jobs row in Supabase DB is marked 'completed'
+#   4. The render_jobs row in Cloudflare D1 DB is marked 'completed'
 # =============================================================================
 
 name: Render Video
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       job_id:
-        description: "UUID of the render job (matches render_jobs.id in Supabase)"
+        description: "UUID of the render job (matches render_jobs.id in D1)"
         required: true
         type: string
       props:
@@ -247,7 +247,7 @@ jobs:
 
       # ── 5. Publish the final MP4 as a public GitHub release asset ────────────
       # This gives the browser a direct GitHub-hosted download URL, so Vercel
-      # never proxies the 300 MB file and we avoid Supabase storage limits.
+      # never proxies the 300 MB file and we avoid storage limits.
       - name: Publish direct download asset
         id: release_asset
         env:
@@ -275,71 +275,35 @@ jobs:
           echo "asset_name=${ASSET_NAME}" >> "${GITHUB_OUTPUT}"
           echo "download_url=${DOWNLOAD_URL}" >> "${GITHUB_OUTPUT}"
 
-      # ── 6. Mark the job completed in Supabase DB ─────────────────────────────
-      - name: Setup Node.js for DB update
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Supabase client
-        run: npm install @supabase/supabase-js
-
-      - name: Mark job completed
+      # ── 6. Mark the job completed in D1 DB ─────────────────────────────────────
+      - name: Mark job completed in D1
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
           JOB_ID: ${{ inputs.job_id }}
           DIRECT_DOWNLOAD_URL: ${{ steps.release_asset.outputs.download_url }}
         run: |
-          node - <<'EOF'
-          const { createClient } = require('@supabase/supabase-js');
-
-          const supabase = createClient(
-            process.env.SUPABASE_URL,
-            process.env.SUPABASE_SERVICE_ROLE_KEY,
-            { auth: { persistSession: false } }
-          );
-          const jobId = process.env.JOB_ID;
-          const directDownloadUrl = process.env.DIRECT_DOWNLOAD_URL;
-
-          async function main() {
-            if (!directDownloadUrl) {
-              throw new Error('Missing direct download URL from GitHub release upload');
-            }
-
-            // Mark the render job as completed in Supabase DB
-            const { error: dbError } = await supabase
-              .from('render_jobs')
-              .update({
-                status: 'completed',
-                progress: 100,
-                message: 'Render complete — direct download ready',
-                url: directDownloadUrl,
-              })
-              .eq('id', jobId);
-
-            if (dbError) {
-              throw new Error(`DB update failed: ${dbError.message}`);
-            }
-            console.log(`render_jobs row ${jobId} marked completed ✓`);
-            console.log(`Direct download URL: ${directDownloadUrl}`);
-          }
-
-          main().catch((err) => {
-            console.error('FATAL:', err.message);
-            // Also try to mark the job as failed in the DB
-            const supabase2 = createClient(
-              process.env.SUPABASE_URL,
-              process.env.SUPABASE_SERVICE_ROLE_KEY,
-              { auth: { persistSession: false } }
-            );
-            supabase2.from('render_jobs').update({
-              status: 'failed',
-              error: err.message,
-              message: 'Stitch/publish step failed',
-            }).eq('id', process.env.JOB_ID).then(() => process.exit(1));
-          });
-          EOF
+          JOB_ID="${{ inputs.job_id }}"
+          DIRECT_URL="${{ steps.release_asset.outputs.download_url }}"
+          
+          if [ -z "$DIRECT_URL" ]; then
+            echo "Missing direct download URL"
+            exit 1
+          fi
+          
+          RESPONSE=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CLOUDFLARE_D1_DATABASE_ID}/raw" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"sql\": \"UPDATE render_jobs SET status = 'completed', progress = 100, message = 'Render complete — direct download ready', url = ?, updated_at = datetime('now') WHERE id = ?\",
+              \"params\": [\"${DIRECT_URL}\", \"${JOB_ID}\"]
+            }")
+          
+          echo "$RESPONSE" | grep -q '"success":true' && \
+            echo "render_jobs row ${JOB_ID} marked completed ✓" || \
+            (echo "D1 update failed: $RESPONSE" && exit 1)
 
       # ── 7. Upload final video as GH artifact too (optional backup) ────────────
       - name: Upload final video as GitHub artifact
